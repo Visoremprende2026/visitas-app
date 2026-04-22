@@ -5,7 +5,7 @@
 
 import * as SecureStore from 'expo-secure-store';
 
-const BASE_URL = 'http://192.168.1.12:8000'; // Cambiar por IP real del servidor
+const BASE_URL = 'https://app-visitas-backend.gbnzpz.easypanel.host';
 
 // ---- helpers ----
 

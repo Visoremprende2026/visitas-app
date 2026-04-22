@@ -1,31 +1,60 @@
 // ============================================================
-//  hooks/useBLE.js — Scanner BLE en segundo plano
-//  Detecta el UUID del beacon del EG118 via RSSI
+//  hooks/useBLE.js — Scanner BLE para iBeacons
 // ============================================================
 
 import { useState, useEffect, useRef } from 'react';
 import { BleManager } from 'react-native-ble-plx';
-import { Platform, PermissionsAndroid, Alert, Linking } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
+import { decode as base64Decode } from 'base-64';
 
-// Umbral RSSI — ajustar segun distancia deseada a la puerta
-// -75 dBm ≈ 10-15 metros. Subir a -65 para mas precision (~5m)
 const RSSI_UMBRAL = -75;
 
-// UUIDs de los beacons — deben coincidir con los del EG118
-// Se reciben como parametro para soportar multiples edificios
-
+// Parsea el UUID de un iBeacon desde manufacturerData (base64)
+function parseIBeaconUUID(manufacturerDataBase64) {
+  if (!manufacturerDataBase64) return null;
+  
+  try {
+    const raw = base64Decode(manufacturerDataBase64);
+    // iBeacon format: 2 bytes company (Apple 0x004C) + 2 bytes type + 16 bytes UUID + 2 major + 2 minor + 1 tx
+    // El UUID empieza en el byte 4 y tiene 16 bytes
+    if (raw.length < 20) return null;
+    
+    const bytes = [];
+    for (let i = 0; i < raw.length; i++) {
+      bytes.push(raw.charCodeAt(i));
+    }
+    
+    // Verificar que es iBeacon (company 0x4C00, type 0x0215)
+    if (bytes[0] !== 0x4C || bytes[1] !== 0x00) return null;
+    if (bytes[2] !== 0x02 || bytes[3] !== 0x15) return null;
+    
+    // Extraer UUID (bytes 4-19)
+    const uuidBytes = bytes.slice(4, 20);
+    const uuid = [
+      uuidBytes.slice(0, 4),
+      uuidBytes.slice(4, 6),
+      uuidBytes.slice(6, 8),
+      uuidBytes.slice(8, 10),
+      uuidBytes.slice(10, 16),
+    ].map(part => 
+      part.map(b => b.toString(16).padStart(2, '0')).join('')
+    ).join('-');
+    
+    return uuid.toLowerCase();
+  } catch (e) {
+    console.log('[BLE] Error parseando iBeacon:', e.message);
+    return null;
+  }
+}
 
 export function useBLE(uuidsBeacon = [], onBeaconDetectado) {
   const [escaneando, setEscaneando] = useState(false);
   const [error, setError] = useState(null);
   const [uuidDetectado, setUuidDetectado] = useState(null);
-  const scanRef = useRef(null);
-  const deteccionCooldown = useRef(false); // Evita multiples disparos seguidos
+  const deteccionCooldown = useRef(false);
   const manager = useRef(null);
 
-  
   useEffect(() => {
-    
     console.log('[BLE] useEffect - uuidsBeacon:', uuidsBeacon);
     
     if (uuidsBeacon.length === 0) {
@@ -33,14 +62,12 @@ export function useBLE(uuidsBeacon = [], onBeaconDetectado) {
       return;
     }
 
-    // Inicializar manager si no existe
     if (!manager.current) {
       try {
         manager.current = new BleManager();
         console.log('[BLE] Manager creado');
       } catch (e) {
         console.log('[BLE] Error creando manager:', e.message);
-        console.log('[BLE] No disponible:', e.message);
         return;
       }
     }
@@ -60,7 +87,6 @@ export function useBLE(uuidsBeacon = [], onBeaconDetectado) {
       
       const permisos = [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
       
-      // BLUETOOTH_SCAN y BLUETOOTH_CONNECT solo para Android 12+ (API 31+)
       if (apiLevel >= 31) {
         permisos.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN);
         permisos.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
@@ -74,17 +100,17 @@ export function useBLE(uuidsBeacon = [], onBeaconDetectado) {
   }
 
   function iniciarScan() {
-
-      if (!manager.current) {
-    console.log('[BLE] Manager no disponible');
-    return;
-  }
+    if (!manager.current) {
+      console.log('[BLE] Manager no disponible');
+      return;
+    }
+    
     setEscaneando(true);
     setError(null);
 
     manager.current.startDeviceScan(
-      null,      // null = escanear todos los UUIDs
-      { allowDuplicates: true }, // Recibir cada advertising packet
+      null,
+      { allowDuplicates: true },
       (err, device) => {
         if (err) {
           setError(err.message);
@@ -92,39 +118,39 @@ export function useBLE(uuidsBeacon = [], onBeaconDetectado) {
           return;
         }
 
-        if (!device || !device.serviceUUIDs) return;
+        if (!device) return;
 
-        // Verificar si el UUID del dispositivo esta en la lista de beacons
-        const uuidEncontrado = device.serviceUUIDs.find(uid =>
-          uuidsBeacon.map(u => u.toLowerCase()).includes(uid.toLowerCase())
-        );
+        // Intentar parsear como iBeacon
+        const beaconUUID = parseIBeaconUUID(device.manufacturerData);
+        
+        if (!beaconUUID) return;
 
-        if (!uuidEncontrado) return;
+        // Verificar si el UUID está en la lista
+        const uuidsLower = uuidsBeacon.map(u => u.toLowerCase());
+        if (!uuidsLower.includes(beaconUUID)) return;
 
-        // Verificar RSSI — filtrar por distancia
+        // Verificar RSSI
         const rssi = device.rssi || -100;
         if (rssi < RSSI_UMBRAL) return;
 
-        console.log(`[BLE] Beacon detectado: ${uuidEncontrado} | RSSI: ${rssi}`);
-        setUuidDetectado(uuidEncontrado);
+        console.log(`[BLE] iBeacon detectado: ${beaconUUID} | RSSI: ${rssi}`);
+        setUuidDetectado(beaconUUID);
 
-        // Cooldown de 10 segundos para no disparar multiples veces
         if (deteccionCooldown.current) return;
         deteccionCooldown.current = true;
         setTimeout(() => { deteccionCooldown.current = false; }, 10000);
 
-        // Llamar al callback con el UUID detectado
         if (onBeaconDetectado) {
-          onBeaconDetectado(uuidEncontrado);
+          onBeaconDetectado(beaconUUID);
         }
       }
     );
   }
 
   function detenerScan() {
-      if (manager.current) {
-    manager.current.stopDeviceScan();
-  }
+    if (manager.current) {
+      manager.current.stopDeviceScan();
+    }
     setEscaneando(false);
   }
 

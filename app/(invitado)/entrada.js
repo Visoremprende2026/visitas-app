@@ -32,7 +32,7 @@ export default function Entrada() {
   const [estado, setEstado] = useState(ESTADO.BUSCANDO);
   const [resultado, setResultado] = useState(null);
   const [mensajeError, setMensajeError] = useState('');
-
+  const [abriendo, setAbriendo] = useState(null);  // ← AGREGAR ESTA LÍNEA
   const [beaconDetectado, setBeaconDetectado] = useState(false);
   const [invitacionBeacon, setInvitacionBeacon] = useState(null);
 
@@ -72,6 +72,7 @@ export default function Entrada() {
   async function handleBotonManual(inv) {
     if (estado === ESTADO.ABRIENDO) return;
     await solicitarAcceso(inv.uuid_ble, inv.id);
+    setAbriendo(null);    // ← Limpiar después
     // Reset beacon state after opening
     setBeaconDetectado(false);
     setInvitacionBeacon(null);
@@ -93,18 +94,18 @@ export default function Entrada() {
 
   // ---- Pantallas de resultado ----
 
-  if (estado === ESTADO.ABRIENDO) {
-    return (
-      <View style={styles.centrado}>
-        <ActivityIndicator size="large" color="#2E4A7A" />
-        <Text style={styles.estadoTexto}>Abriendo barrera...</Text>
-      </View>
-    );
-  }
+if (estado === ESTADO.ABRIENDO) {
+  return (
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1E3A5F' }}>
+      <ActivityIndicator size="large" color="#F59E0B" />
+      <Text style={styles.estadoTexto}>Abriendo barrera...</Text>
+    </View>
+  );
+}
 
   if (estado === ESTADO.ENTRADA) {
     return (
-      <View style={styles.centrado}>
+      <View style={[styles.container, styles.centrado]}>
         <View style={[styles.icono, { backgroundColor: '#22C55E' }]}>
           <Text style={styles.iconoTexto}>↑</Text>
         </View>
@@ -116,7 +117,7 @@ export default function Entrada() {
 
   if (estado === ESTADO.SALIDA) {
     return (
-      <View style={styles.centrado}>
+      <View style={[styles.container, styles.centrado]}>
         <View style={[styles.icono, { backgroundColor: '#F59E0B' }]}>
           <Text style={styles.iconoTexto}>↓</Text>
         </View>
@@ -128,7 +129,7 @@ export default function Entrada() {
 
   if (estado === ESTADO.ERROR) {
     return (
-      <View style={styles.centrado}>
+      <View style={[styles.container, styles.centrado]}>
         <View style={[styles.icono, { backgroundColor: '#E24B4A' }]}>
           <Text style={styles.iconoTexto}>✕</Text>
         </View>
@@ -213,13 +214,14 @@ const styles = StyleSheet.create({
   container:       { flex: 1, backgroundColor: '#1E3A5F' },
   centrado:        { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
   header:          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-                     padding: 20, backgroundColor: '#1E3A5F' },
+                     padding: 20, paddingTop: 50, backgroundColor: '#1E3A5F' },
   titulo:          { fontSize: 20, fontWeight: '700', color: '#FFFFFF' },
   cerrarSesion:    { color: 'rgba(255,255,255,0.85)', fontSize: 14 },
   bleIndicador:    { flexDirection: 'row', alignItems: 'center', padding: 14,
                      backgroundColor: '#1E3A5F', borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.15)', gap: 10 },
   bleDot:          { width: 10, height: 10, borderRadius: 5, backgroundColor: '#CCC' },
-  bleDotActivo:    { backgroundColor: '#1D9E75' },
+  bleDotActivo:    { backgroundColor: '#F59E0B' },
+  bleDotBeacon:    { backgroundColor: '#22C55E' },
   bleTexto:        { fontSize: 13, color: 'rgba(255,255,255,0.85)', flex: 1 },
   card:            { borderRadius: 12, padding: 16, marginBottom: 12,
                      borderColor: '#FFFFFF', borderWidth: 0.5 },
