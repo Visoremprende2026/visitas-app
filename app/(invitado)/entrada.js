@@ -1,6 +1,6 @@
 // ============================================================
 //  app/(invitado)/entrada.js — Pantalla principal del invitado
-//  Beacon + GPS fallback — el backend decide entrada o salida
+//  Beacon por header + GPS fallback
 // ============================================================
 
 import { useState, useEffect, useRef } from 'react';
@@ -19,7 +19,7 @@ const ESTADO = {
 };
 
 const DIAS_LABELS = { '1':'Lun','2':'Mar','3':'Mie','4':'Jue','5':'Vie','6':'Sab','7':'Dom' };
-const GPS_TIMEOUT_SEGUNDOS = 15; // Tiempo sin beacon antes de ofrecer GPS
+const GPS_TIMEOUT_SEGUNDOS = 15;
 
 function diasTexto(dias) {
   if (dias === '1234567') return 'Todos los dias';
@@ -54,23 +54,42 @@ export default function Entrada() {
   const [obteniendoGPS, setObteniendoGPS] = useState(false);
   const gpsTimerRef = useRef(null);
 
-  const uuidsBeacon = invitaciones
+  // Extraer headers (uuid_ble) de las invitaciones para useBLE
+  const headersBD = invitaciones
     .map(inv => inv.uuid_ble)
     .filter(Boolean);
 
-  const { escaneando } = useBLE(uuidsBeacon, handleBeaconDetectado);
+  const { escaneando, headerDetectado } = useBLE(headersBD, handleBeaconDetectado);
+
+  // 🔥 FIX: Sincronizar estado beaconDetectado con headerDetectado de useBLE
+  useEffect(() => {
+    if (headerDetectado) {
+      const inv = invitaciones.find(i => i.uuid_ble?.toLowerCase() === headerDetectado.toLowerCase());
+      if (inv) {
+        setBeaconDetectado(true);
+        setInvitacionBeacon(inv);
+        // Si beacon vuelve, cancelar modo GPS
+        setModoGPS(false);
+        setGpsDisponible(false);
+        setUbicacionUsuario(null);
+      }
+    } else {
+      // Beacon perdido
+      setBeaconDetectado(false);
+      setInvitacionBeacon(null);
+    }
+  }, [headerDetectado]);
 
   useEffect(() => {
     cargarInvitaciones();
   }, []);
 
-  // Timer para GPS fallback: si no detecta beacon en X segundos, ofrece GPS
+  // Timer para GPS fallback
   useEffect(() => {
     if (escaneando && !beaconDetectado && invitaciones.length > 0) {
       gpsTimerRef.current = setTimeout(() => {
-        // Solo activar si hay puertas con GPS configurado
         const tieneGPS = invitaciones.some(inv => inv.puerta_lat && inv.puerta_lng);
-        if (tieneGPS) {
+        if (tieneGPS && !beaconDetectado) {
           setModoGPS(true);
         }
       }, GPS_TIMEOUT_SEGUNDOS * 1000);
@@ -80,15 +99,6 @@ export default function Entrada() {
       if (gpsTimerRef.current) clearTimeout(gpsTimerRef.current);
     };
   }, [escaneando, beaconDetectado, invitaciones]);
-
-  // Limpiar modo GPS si beacon es detectado
-  useEffect(() => {
-    if (beaconDetectado) {
-      setModoGPS(false);
-      setGpsDisponible(false);
-      setUbicacionUsuario(null);
-    }
-  }, [beaconDetectado]);
 
   useEffect(() => {
     if (estado === ESTADO.ENTRADA || estado === ESTADO.SALIDA || estado === ESTADO.ERROR) {
@@ -114,13 +124,9 @@ export default function Entrada() {
     }
   }
 
-  function handleBeaconDetectado(uuid_ble) {
+  function handleBeaconDetectado(header) {
     if (estado === ESTADO.ABRIENDO) return;
-    const inv = invitaciones.find(i => i.uuid_ble?.toLowerCase() === uuid_ble.toLowerCase());
-    if (inv) {
-      setBeaconDetectado(true);
-      setInvitacionBeacon(inv);
-    }
+    // La sincronización ahora se hace en el useEffect de headerDetectado
   }
 
   async function obtenerUbicacion() {
@@ -162,7 +168,7 @@ export default function Entrada() {
     if (estado === ESTADO.ABRIENDO) return;
 
     if (beaconDetectado) {
-      // Modo beacon: validar que el beacon coincida
+      // Modo beacon: validar que el header coincida
       if (!invitacionBeacon || inv.uuid_ble?.toLowerCase() !== invitacionBeacon.uuid_ble?.toLowerCase()) {
         Alert.alert('Error', 'No estás frente a la puerta correcta para esta invitación.');
         return;
