@@ -30,11 +30,7 @@ async function handleContinuar() {
   setCargando(true);
   try {
     // Verificar si tiene PIN
-    const response = await fetch('http://192.168.1.12:8000/auth/pin/estado-publico', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ numero_celular: numeroFormateado }),
-    });
+
     const estadoPin = await api.estadoPinPublico(numeroFormateado);
 
     if (estadoPin.tiene_pin) {

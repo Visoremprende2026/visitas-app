@@ -13,6 +13,7 @@ async function getToken() {
   return await SecureStore.getItemAsync('jwt_token');
 }
 
+
 async function request(path, options = {}) {
   const token = await getToken();
   const headers = {
@@ -21,11 +22,15 @@ async function request(path, options = {}) {
     ...options.headers,
   };
 
+  console.log('[API] Llamando a:', `${BASE_URL}${path}`);
+
   try {
       const response = await fetch(`${BASE_URL}${path}`, {
         ...options,
         headers,
       });
+
+      console.log('[API] Response status:', response.status);
 
       const data = await response.json();
 
@@ -35,6 +40,7 @@ async function request(path, options = {}) {
 
       return data;
     } catch (e) {
+      console.log('[API] Error completo:', e.message, e.name);
       throw new Error(`${e.message} | URL: ${BASE_URL}${path} | ${e.name}`);
     }
 }
@@ -107,10 +113,10 @@ export const api = {
 
   // ---- Acceso ----
 
-  solicitarAcceso: (uuid_ble, invitacion_id = null) =>
+  solicitarAcceso: (uuid_ble, invitacion_id = null, lat = null, lng = null) =>
     request('/acceso/solicitar', {
       method: 'POST',
-      body: JSON.stringify({ uuid_ble, invitacion_id }),
+      body: JSON.stringify({ uuid_ble, invitacion_id, lat, lng }),
     }),
 
   logAccesos: (limite = 50) =>

@@ -1,5 +1,5 @@
 // ============================================================
-//  hooks/useBLE.js — Scanner BLE para iBeacons
+//  hooks/useBLE.js — Scanner BLE basado en HEADER (ROBUSTO)
 // ============================================================
 
 import { useState, useEffect, useRef } from 'react';
@@ -7,152 +7,311 @@ import { BleManager } from 'react-native-ble-plx';
 import { Platform, PermissionsAndroid } from 'react-native';
 import { decode as base64Decode } from 'base-64';
 
-const RSSI_UMBRAL = -75;
+const RSSI_UMBRAL = -90;
+const SCAN_RESTART_INTERVAL = 15000;
+const BEACON_TIMEOUT = 3000;
 
-// Parsea el UUID de un iBeacon desde manufacturerData (base64)
-function parseIBeaconUUID(manufacturerDataBase64) {
-  if (!manufacturerDataBase64) return null;
-  
+// 🔹 base64 → HEX
+function base64ToHex(base64) {
+  if (!base64) return null;
+
   try {
-    const raw = base64Decode(manufacturerDataBase64);
-    // iBeacon format: 2 bytes company (Apple 0x004C) + 2 bytes type + 16 bytes UUID + 2 major + 2 minor + 1 tx
-    // El UUID empieza en el byte 4 y tiene 16 bytes
-    if (raw.length < 20) return null;
-    
-    const bytes = [];
+    const raw = base64Decode(base64);
+
+    let hex = '';
+
     for (let i = 0; i < raw.length; i++) {
-      bytes.push(raw.charCodeAt(i));
+      hex += raw.charCodeAt(i).toString(16).padStart(2, '0');
     }
-    
-    // Verificar que es iBeacon (company 0x4C00, type 0x0215)
-    if (bytes[0] !== 0x4C || bytes[1] !== 0x00) return null;
-    if (bytes[2] !== 0x02 || bytes[3] !== 0x15) return null;
-    
-    // Extraer UUID (bytes 4-19)
-    const uuidBytes = bytes.slice(4, 20);
-    const uuid = [
-      uuidBytes.slice(0, 4),
-      uuidBytes.slice(4, 6),
-      uuidBytes.slice(6, 8),
-      uuidBytes.slice(8, 10),
-      uuidBytes.slice(10, 16),
-    ].map(part => 
-      part.map(b => b.toString(16).padStart(2, '0')).join('')
-    ).join('-');
-    
-    return uuid.toLowerCase();
+
+    return hex.toLowerCase();
+
   } catch (e) {
-    console.log('[BLE] Error parseando iBeacon:', e.message);
+    console.log('[BLE] Error base64ToHex:', e.message);
     return null;
   }
 }
 
-export function useBLE(uuidsBeacon = [], onBeaconDetectado) {
+// 🔹 HEADER
+function extractHeader(hex) {
+  if (!hex || hex.length < 12) return null;
+
+  return hex.substring(0, 12).toLowerCase();
+}
+
+export function useBLE(headersBD = [], onBeaconDetectado) {
+
   const [escaneando, setEscaneando] = useState(false);
   const [error, setError] = useState(null);
-  const [uuidDetectado, setUuidDetectado] = useState(null);
+  const [headerDetectado, setHeaderDetectado] = useState(null);
+
   const deteccionCooldown = useRef(false);
+
   const manager = useRef(null);
 
+  const scanTimeout = useRef(null);
+
+  // 🔥 última vez que vimos beacon válido
+  const ultimaDeteccion = useRef(0);
+
+  // 🔥 interval pérdida beacon
+  const beaconWatchdog = useRef(null);
+
   useEffect(() => {
-    console.log('[BLE] useEffect - uuidsBeacon:', uuidsBeacon);
-    
-    if (uuidsBeacon.length === 0) {
-      console.log('[BLE] Sin UUIDs, saliendo');
+
+    console.log('[BLE] useEffect - headersBD:', headersBD);
+
+    if (headersBD.length === 0) {
+      console.log('[BLE] Sin headers, saliendo');
       return;
     }
 
     if (!manager.current) {
-      try {
-        manager.current = new BleManager();
-        console.log('[BLE] Manager creado');
-      } catch (e) {
-        console.log('[BLE] Error creando manager:', e.message);
-        return;
-      }
+
+      manager.current = new BleManager();
+
+      console.log('[BLE] Manager creado');
     }
 
+    // 🔵 Listener estado Bluetooth
+    const subscription = manager.current.onStateChange((state) => {
+
+      console.log('[BLE] Estado Bluetooth:', state);
+
+      if (state === 'PoweredOn') {
+
+        iniciarScan();
+
+      } else {
+
+        detenerScan();
+      }
+
+    }, true);
+
     solicitarPermisos().then(tienePermisos => {
+
       console.log('[BLE] Permisos:', tienePermisos);
-      if (tienePermisos) iniciarScan();
+
+      if (tienePermisos) {
+        iniciarScan();
+      }
+
     });
 
-    return () => detenerScan();
-  }, [uuidsBeacon.join(',')]);
+    // 🔥 watchdog de pérdida beacon
+    beaconWatchdog.current = setInterval(() => {
+
+      if (!headerDetectado) return;
+
+      const diff = Date.now() - ultimaDeteccion.current;
+
+      if (diff > BEACON_TIMEOUT) {
+
+        console.log('[BLE] ⚠ Beacon perdido');
+
+        setHeaderDetectado(null);
+      }
+
+    }, 1000);
+
+    return () => {
+
+      detenerScan();
+
+      subscription.remove();
+
+      if (beaconWatchdog.current) {
+        clearInterval(beaconWatchdog.current);
+      }
+    };
+
+  }, [headersBD.join(',')]);
 
   async function solicitarPermisos() {
+
     if (Platform.OS === 'android') {
+
       const apiLevel = Platform.Version;
-      console.log('[BLE] Android API level:', apiLevel);
-      
-      const permisos = [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
-      
+
+      const permisos = [
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
+      ];
+
       if (apiLevel >= 31) {
-        permisos.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN);
-        permisos.push(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+
+        permisos.push(
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN
+        );
+
+        permisos.push(
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
+        );
       }
 
       const granted = await PermissionsAndroid.requestMultiple(permisos);
-      console.log('[BLE] Resultado permisos:', JSON.stringify(granted));
-      return Object.values(granted).every(v => v === 'granted');
+
+      return Object.values(granted).every(
+        v => v === 'granted'
+      );
     }
+
     return true;
   }
 
   function iniciarScan() {
-    if (!manager.current) {
-      console.log('[BLE] Manager no disponible');
-      return;
-    }
-    
+
+    if (!manager.current) return;
+
+    // 🔥 evitar scans duplicados
+    manager.current.stopDeviceScan();
+
+    console.log('[BLE] ▶ Iniciando scan');
+
     setEscaneando(true);
+
     setError(null);
 
     manager.current.startDeviceScan(
       null,
-      { allowDuplicates: true },
+      {
+        allowDuplicates: true,
+        scanMode: 2, // LOW_LATENCY
+        callbackType: 1,
+      },
+
       (err, device) => {
+
         if (err) {
+
+          console.log('[BLE] ❌ Error scan:', err.message);
+
           setError(err.message);
+
           setEscaneando(false);
+
+          // 🔁 reintento automático
+          setTimeout(() => {
+            iniciarScan();
+          }, 2000);
+
           return;
         }
 
         if (!device) return;
 
-        // Intentar parsear como iBeacon
-        const beaconUUID = parseIBeaconUUID(device.manufacturerData);
-        
-        if (!beaconUUID) return;
+        if (!device.manufacturerData) return;
 
-        // Verificar si el UUID está en la lista
-        const uuidsLower = uuidsBeacon.map(u => u.toLowerCase());
-        if (!uuidsLower.includes(beaconUUID)) return;
+        const hex = base64ToHex(device.manufacturerData);
 
-        // Verificar RSSI
-        const rssi = device.rssi || -100;
+        if (!hex) return;
+
+        // 🔎 logs opcionales
+        // console.log('[BLE RAW HEX]', hex);
+
+        const header = extractHeader(hex);
+
+        if (!header) return;
+
+        // console.log('[BLE HEADER]', header);
+
+        const headersLower = headersBD.map(
+          h => h.toLowerCase()
+        );
+
+        const match = headersLower.includes(header);
+
+        // console.log('[BLE DEBUG]', {
+        //   headerLeido: header,
+        //   headersBD: headersLower,
+        //   match,
+        //   rssi: device.rssi
+        // });
+
+        if (!match) return;
+
+        const rssi = device.rssi ?? -100;
+
         if (rssi < RSSI_UMBRAL) return;
 
-        console.log(`[BLE] iBeacon detectado: ${beaconUUID} | RSSI: ${rssi}`);
-        setUuidDetectado(beaconUUID);
+        // 🔥 actualiza última detección
+        ultimaDeteccion.current = Date.now();
 
-        if (deteccionCooldown.current) return;
+        // 🔥 actualiza estado UI
+        if (headerDetectado !== header) {
+
+          console.log('[BLE] ✅ Beacon detectado:', header);
+
+          setHeaderDetectado(header);
+        }
+
+        // console.log(
+        //   '[BLE MATCH INMEDIATO]',
+        //   header,
+        //   'RSSI:',
+        //   rssi
+        // );
+
+        if (deteccionCooldown.current) {
+
+          // console.log('[BLE] EN COOLDOWN');
+
+          return;
+        }
+
         deteccionCooldown.current = true;
-        setTimeout(() => { deteccionCooldown.current = false; }, 10000);
+
+        setTimeout(() => {
+          deteccionCooldown.current = false;
+        }, 2000);
 
         if (onBeaconDetectado) {
-          onBeaconDetectado(beaconUUID);
+
+          onBeaconDetectado(header);
         }
       }
     );
+
+    // 🔁 reinicio preventivo scan
+    if (scanTimeout.current) {
+
+      clearTimeout(scanTimeout.current);
+    }
+
+    scanTimeout.current = setTimeout(() => {
+
+      console.log('[BLE] 🔁 Reinicio preventivo scan');
+
+      detenerScan();
+
+      setTimeout(() => {
+        iniciarScan();
+      }, 300);
+
+    }, SCAN_RESTART_INTERVAL);
   }
 
   function detenerScan() {
+
     if (manager.current) {
+
+      console.log('[BLE] ⏹ Deteniendo scan');
+
       manager.current.stopDeviceScan();
     }
+
+    if (scanTimeout.current) {
+
+      clearTimeout(scanTimeout.current);
+    }
+
     setEscaneando(false);
   }
 
-  return { escaneando, error, uuidDetectado, detenerScan };
+  return {
+    escaneando,
+    error,
+    headerDetectado,
+    detenerScan
+  };
 }

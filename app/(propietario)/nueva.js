@@ -6,7 +6,7 @@
 import { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
-  StyleSheet, Alert, ActivityIndicator, Switch
+  StyleSheet, Alert, ActivityIndicator, Switch, Linking
 } from 'react-native';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { router } from 'expo-router';
@@ -151,8 +151,21 @@ export default function NuevaVisita() {
         dias_permitidos: diasSeleccionados,
         nota: nota.trim() || null,
       });
-      Alert.alert('Invitacion creada', `Invitacion para ${numeroFormateado} creada correctamente.`, [
-        { text: 'OK', onPress: () => router.replace('/(propietario)/visitas') }
+
+      const fechaHastaTexto = fechaHasta.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      const mensajeWA = `Hola, te he invitado a ${unidadDestino || 'mi domicilio'}. Tu acceso está habilitado hasta el ${fechaHastaTexto}. Descarga la app AppAcceso para ingresar.`;
+      const numeroWA = numeroFormateado.replace('+', '');
+
+      Alert.alert('Invitación creada', `Invitación para ${numeroFormateado} creada correctamente.\n\n¿Deseas notificar al invitado?`, [
+        { text: 'No', onPress: () => router.replace('/(propietario)/visitas') },
+        { text: 'Notificar', onPress: async () => {
+          try {
+            await Linking.openURL(`https://wa.me/${numeroWA}?text=${encodeURIComponent(mensajeWA)}`);
+          } catch {
+            await Linking.openURL(`sms:${numeroFormateado}?body=${encodeURIComponent(mensajeWA)}`).catch(() => {});
+          }
+          router.replace('/(propietario)/visitas');
+        }},
       ]);
     } catch (e) {
       Alert.alert('Error', e.message);
