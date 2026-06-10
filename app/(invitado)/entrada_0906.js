@@ -19,7 +19,7 @@ const ESTADO = {
 };
 
 const DIAS_LABELS = { '1':'Lun','2':'Mar','3':'Mie','4':'Jue','5':'Vie','6':'Sab','7':'Dom' };
-const GPS_TIMEOUT_SEGUNDOS = 20;
+const GPS_TIMEOUT_SEGUNDOS = 15;
 
 function diasTexto(dias) {
   if (dias === '1234567') return 'Todos los dias';
@@ -61,7 +61,7 @@ export default function Entrada() {
 
   const { escaneando, headerDetectado } = useBLE(headersBD, handleBeaconDetectado);
 
-  // FIX: Sincronizar estado beaconDetectado con headerDetectado de useBLE
+  // 🔥 FIX: Sincronizar estado beaconDetectado con headerDetectado de useBLE
   useEffect(() => {
     if (headerDetectado) {
       const inv = invitaciones.find(i => i.uuid_ble?.toLowerCase() === headerDetectado.toLowerCase());
@@ -86,7 +86,7 @@ export default function Entrada() {
 
   // Timer para GPS fallback
   useEffect(() => {
-    if (!beaconDetectado && invitaciones.length > 0) {
+    if (escaneando && !beaconDetectado && invitaciones.length > 0) {
       gpsTimerRef.current = setTimeout(() => {
         const tieneGPS = invitaciones.some(inv => inv.puerta_lat && inv.puerta_lng);
         if (tieneGPS && !beaconDetectado) {
@@ -98,7 +98,7 @@ export default function Entrada() {
     return () => {
       if (gpsTimerRef.current) clearTimeout(gpsTimerRef.current);
     };
-  }, [beaconDetectado, invitaciones]);
+  }, [escaneando, beaconDetectado, invitaciones]);
 
   useEffect(() => {
     if (estado === ESTADO.ENTRADA || estado === ESTADO.SALIDA || estado === ESTADO.ERROR) {
