@@ -84,12 +84,16 @@ export default function Entrada() {
     cargarInvitaciones();
   }, []);
 
-  // Timer para GPS fallback
+// Timer para GPS fallback
   useEffect(() => {
+    console.log('[GPS] Timer check - beaconDetectado:', beaconDetectado, 'invitaciones:', invitaciones.length);
     if (!beaconDetectado && invitaciones.length > 0) {
+      console.log('[GPS] Iniciando timer de', GPS_TIMEOUT_SEGUNDOS, 'segundos');
       gpsTimerRef.current = setTimeout(() => {
         const tieneGPS = invitaciones.some(inv => inv.puerta_lat && inv.puerta_lng);
+        console.log('[GPS] Timer disparado - tieneGPS:', tieneGPS, 'beaconDetectado:', beaconDetectado);
         if (tieneGPS && !beaconDetectado) {
+          console.log('[GPS] Activando modo GPS');
           setModoGPS(true);
         }
       }, GPS_TIMEOUT_SEGUNDOS * 1000);
@@ -264,17 +268,25 @@ export default function Entrada() {
       </View>
 
       <View style={styles.bleIndicador}>
-        <View style={[styles.bleDot,
-          beaconDetectado ? styles.bleDotBeacon :
-          gpsDisponible ? styles.bleDotGPS :
-          escaneando && styles.bleDotActivo
-        ]} />
-        <Text style={styles.bleTexto}>
-          {beaconDetectado ? 'Barrera detectada — toca el boton para abrir' :
-           gpsDisponible ? 'Ubicación verificada — toca el boton para abrir' :
-           modoGPS ? 'Beacon no detectado — usa tu ubicación' :
-           escaneando ? 'Buscando barrera...' : 'Bluetooth inactivo'}
-        </Text>
+        {(() => {
+          const algunaEnRango = gpsDisponible && ubicacionUsuario && invitaciones.some(inv => estaEnRango(inv));
+          return (
+            <>
+              <View style={[styles.bleDot,
+                beaconDetectado ? styles.bleDotBeacon :
+                algunaEnRango ? styles.bleDotGPS :
+                escaneando && styles.bleDotActivo
+              ]} />
+              <Text style={styles.bleTexto}>
+                {beaconDetectado ? 'Barrera detectada — toca el boton para abrir' :
+                 algunaEnRango ? 'Ubicación verificada — toca el boton para abrir' :
+                 gpsDisponible ? 'Fuera del rango de la puerta' :
+                 modoGPS ? 'Beacon no detectado — usa tu ubicación' :
+                 escaneando ? 'Buscando barrera...' : 'Bluetooth inactivo'}
+              </Text>
+            </>
+          );
+        })()}
       </View>
 
       {modoGPS && !gpsDisponible && !beaconDetectado && (
