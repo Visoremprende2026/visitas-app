@@ -61,35 +61,18 @@ export default function Entrada() {
     .map(inv => inv.uuid_ble)
     .filter(Boolean);
 
-  const { escaneando, headerDetectado } = useBLE(headersBD, () => {});
+  const { escaneando } = useBLE(headersBD, handleBeaconDetectado);
 
-  // Mantener ref actualizado
+  // Mantener ref de escaneando actualizado
   useEffect(() => {
     escaneandoRef.current = escaneando;
   }, [escaneando]);
-
-  // Sincronizar beaconDetectado con headerDetectado
-  useEffect(() => {
-    if (headerDetectado) {
-      const inv = invitaciones.find(i => i.uuid_ble?.toLowerCase() === headerDetectado.toLowerCase());
-      if (inv) {
-        setBeaconDetectado(true);
-        setInvitacionBeacon(inv);
-        setGpsDisponible(false);
-        setGpsFueraDeRango(false);
-        setUbicacionUsuario(null);
-      }
-    } else {
-      setBeaconDetectado(false);
-      setInvitacionBeacon(null);
-    }
-  }, [headerDetectado]);
 
   useEffect(() => {
     cargarInvitaciones();
   }, []);
 
-  // Timer GPS fallback (20 seg sin beacon)
+  // Timer GPS fallback (20 seg sin beacon con BT encendido)
   useEffect(() => {
     if (!beaconDetectado && invitaciones.length > 0 && !gpsDisponible && !obteniendoGPS) {
       gpsTimerRef.current = setTimeout(() => {
@@ -143,6 +126,22 @@ export default function Entrada() {
     }
   }
 
+  // Callback original de useBLE - sin useEffect de sincronización
+  function handleBeaconDetectado(header) {
+    if (estado === ESTADO.ABRIENDO) return;
+    const inv = invitaciones.find(i => i.uuid_ble?.toLowerCase() === header.toLowerCase());
+    if (inv) {
+      setBeaconDetectado(true);
+      setInvitacionBeacon(inv);
+      // Cancelar GPS si beacon detectado
+      setGpsDisponible(false);
+      setGpsFueraDeRango(false);
+      setUbicacionUsuario(false);
+      if (gpsTimerRef.current) clearTimeout(gpsTimerRef.current);
+      if (btOffTimerRef.current) clearTimeout(btOffTimerRef.current);
+    }
+  }
+
   async function obtenerUbicacionAuto() {
     if (obteniendoGPS || gpsDisponible || beaconDetectado) return;
     setObteniendoGPS(true);
@@ -157,7 +156,6 @@ export default function Entrada() {
         accuracy: Location.Accuracy.High,
       });
 
-      // Si beacon fue detectado mientras obteníamos GPS, ignorar
       if (beaconDetectado) {
         setObteniendoGPS(false);
         return;
@@ -169,12 +167,10 @@ export default function Entrada() {
       };
       setUbicacionUsuario(coords);
 
-      // Verificar si alguna invitación está en rango
       const hayEnRango = invitaciones.some(inv => {
         if (!inv.puerta_lat || !inv.puerta_lng) return false;
         const distancia = calcularDistancia(coords.lat, coords.lng, inv.puerta_lat, inv.puerta_lng);
-        const radio = inv.puerta_radio || 50;
-        return distancia <= radio;
+        return distancia <= (inv.puerta_radio || 50);
       });
 
       setGpsDisponible(true);
@@ -192,8 +188,7 @@ export default function Entrada() {
       ubicacionUsuario.lat, ubicacionUsuario.lng,
       inv.puerta_lat, inv.puerta_lng
     );
-    const radio = inv.puerta_radio || 50;
-    return distancia <= radio;
+    return distancia <= (inv.puerta_radio || 50);
   }
 
   async function handleBotonManual(inv) {
@@ -296,7 +291,7 @@ export default function Entrada() {
 
       <View style={styles.bleIndicador}>
         <View style={[styles.bleDot,
-          autorizado ? styles.bleDotBeacon :
+          autorizado ? styles.bleDotVerde :
           gpsFueraDeRango ? styles.bleDotActivo :
           (escaneando || obteniendoGPS) ? styles.bleDotActivo :
           styles.bleDotInactivo
@@ -377,7 +372,7 @@ const styles = StyleSheet.create({
                      backgroundColor: '#1E3A5F', borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.15)', gap: 10 },
   bleDot:          { width: 10, height: 10, borderRadius: 5 },
   bleDotActivo:    { backgroundColor: '#F59E0B' },
-  bleDotBeacon:    { backgroundColor: '#22C55E' },
+  bleDotVerde:     { backgroundColor: '#22C55E' },
   bleDotInactivo:  { backgroundColor: '#CCC' },
   bleTexto:        { fontSize: 13, color: 'rgba(255,255,255,0.85)', flex: 1 },
   card:            { borderRadius: 12, padding: 16, marginBottom: 12,

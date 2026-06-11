@@ -53,31 +53,14 @@ export default function Recibidas() {
 
   const headersBD = invitaciones.map(inv => inv.uuid_ble).filter(Boolean);
 
-  const { escaneando, headerDetectado } = useBLE(headersBD, () => {});
+  const { escaneando } = useBLE(headersBD, handleBeaconDetectado);
 
-  // Mantener ref actualizado
+  // Mantener ref de escaneando actualizado
   useEffect(() => {
     escaneandoRef.current = escaneando;
   }, [escaneando]);
 
-  // Sincronizar beaconDetectado con headerDetectado
-  useEffect(() => {
-    if (headerDetectado) {
-      const inv = invitaciones.find(i => i.uuid_ble?.toLowerCase() === headerDetectado.toLowerCase());
-      if (inv) {
-        setBeaconDetectado(true);
-        setInvitacionBeacon(inv);
-        setGpsDisponible(false);
-        setGpsFueraDeRango(false);
-        setUbicacionUsuario(null);
-      }
-    } else {
-      setBeaconDetectado(false);
-      setInvitacionBeacon(null);
-    }
-  }, [headerDetectado]);
-
-  // Timer GPS fallback (20 seg sin beacon)
+  // Timer GPS fallback (20 seg sin beacon con BT encendido)
   useEffect(() => {
     if (!beaconDetectado && invitaciones.length > 0 && !gpsDisponible && !obteniendoGPS) {
       gpsTimerRef.current = setTimeout(() => {
@@ -119,6 +102,21 @@ export default function Recibidas() {
     }
   }
 
+  // Callback original de useBLE - sin useEffect de sincronización
+  function handleBeaconDetectado(header) {
+    if (abriendo) return;
+    const inv = invitaciones.find(i => i.uuid_ble?.toLowerCase() === header.toLowerCase());
+    if (inv) {
+      setBeaconDetectado(true);
+      setInvitacionBeacon(inv);
+      setGpsDisponible(false);
+      setGpsFueraDeRango(false);
+      setUbicacionUsuario(null);
+      if (gpsTimerRef.current) clearTimeout(gpsTimerRef.current);
+      if (btOffTimerRef.current) clearTimeout(btOffTimerRef.current);
+    }
+  }
+
   async function obtenerUbicacionAuto() {
     if (obteniendoGPS || gpsDisponible || beaconDetectado) return;
     setObteniendoGPS(true);
@@ -147,8 +145,7 @@ export default function Recibidas() {
       const hayEnRango = invitaciones.some(inv => {
         if (!inv.puerta_lat || !inv.puerta_lng) return false;
         const distancia = calcularDistancia(coords.lat, coords.lng, inv.puerta_lat, inv.puerta_lng);
-        const radio = inv.puerta_radio || 50;
-        return distancia <= radio;
+        return distancia <= (inv.puerta_radio || 50);
       });
 
       setGpsDisponible(true);
@@ -166,8 +163,7 @@ export default function Recibidas() {
       ubicacionUsuario.lat, ubicacionUsuario.lng,
       inv.puerta_lat, inv.puerta_lng
     );
-    const radio = inv.puerta_radio || 50;
-    return distancia <= radio;
+    return distancia <= (inv.puerta_radio || 50);
   }
 
   async function handleSolicitarAcceso(inv) {
@@ -227,7 +223,7 @@ export default function Recibidas() {
 
       <View style={styles.bleIndicador}>
         <View style={[styles.bleDot,
-          autorizado ? styles.bleDotBeacon :
+          autorizado ? styles.bleDotVerde :
           gpsFueraDeRango ? styles.bleDotActivo :
           (escaneando || obteniendoGPS) ? styles.bleDotActivo :
           styles.bleDotInactivo
@@ -326,7 +322,7 @@ const styles = StyleSheet.create({
                       borderBottomColor: 'rgba(255,255,255,0.15)', gap: 10 },
   bleDot:           { width: 10, height: 10, borderRadius: 5 },
   bleDotActivo:     { backgroundColor: '#F59E0B' },
-  bleDotBeacon:     { backgroundColor: '#22C55E' },
+  bleDotVerde:      { backgroundColor: '#22C55E' },
   bleDotInactivo:   { backgroundColor: 'rgba(255,255,255,0.3)' },
   bleTexto:         { fontSize: 13, color: 'rgba(255,255,255,0.7)', flex: 1 },
   vacio:            { alignItems: 'center', marginTop: 60, padding: 32 },
