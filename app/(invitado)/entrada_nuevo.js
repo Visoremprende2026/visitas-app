@@ -1,6 +1,6 @@
 // ============================================================
 //  app/(invitado)/entrada.js — Pantalla principal del invitado
-//  Beacon por header + GPS fallback
+//  Beacon por header + GPS fallback transparente
 // ============================================================
 
 import { useState, useEffect, useRef } from 'react';
@@ -20,6 +20,7 @@ const ESTADO = {
 
 const DIAS_LABELS = { '1':'Lun','2':'Mar','3':'Mie','4':'Jue','5':'Vie','6':'Sab','7':'Dom' };
 const GPS_TIMEOUT_SEGUNDOS = 20;
+const BT_OFF_CHECK_SEGUNDOS = 3;
 
 function diasTexto(dias) {
   if (dias === '1234567') return 'Todos los dias';
@@ -48,53 +49,35 @@ export default function Entrada() {
   const [abriendo, setAbriendo] = useState(null);
   const [beaconDetectado, setBeaconDetectado] = useState(false);
   const [invitacionBeacon, setInvitacionBeacon] = useState(null);
-  const [modoGPS, setModoGPS] = useState(false);
   const [gpsDisponible, setGpsDisponible] = useState(false);
+  const [gpsFueraDeRango, setGpsFueraDeRango] = useState(false);
   const [ubicacionUsuario, setUbicacionUsuario] = useState(null);
   const [obteniendoGPS, setObteniendoGPS] = useState(false);
   const gpsTimerRef = useRef(null);
+  const btOffTimerRef = useRef(null);
+  const escaneandoRef = useRef(false);
 
-  // Extraer headers (uuid_ble) de las invitaciones para useBLE
   const headersBD = invitaciones
     .map(inv => inv.uuid_ble)
     .filter(Boolean);
 
-  const { escaneando, headerDetectado } = useBLE(headersBD, handleBeaconDetectado);
+  const { escaneando } = useBLE(headersBD, handleBeaconDetectado);
 
-  // FIX: Sincronizar estado beaconDetectado con headerDetectado de useBLE
+  // Mantener ref de escaneando actualizado
   useEffect(() => {
-    if (headerDetectado) {
-      const inv = invitaciones.find(i => i.uuid_ble?.toLowerCase() === headerDetectado.toLowerCase());
-      if (inv) {
-        setBeaconDetectado(true);
-        setInvitacionBeacon(inv);
-        // Si beacon vuelve, cancelar modo GPS
-        setModoGPS(false);
-        setGpsDisponible(false);
-        setUbicacionUsuario(null);
-      }
-    } else {
-      // Beacon perdido
-      setBeaconDetectado(false);
-      setInvitacionBeacon(null);
-    }
-  }, [headerDetectado]);
+    escaneandoRef.current = escaneando;
+  }, [escaneando]);
 
   useEffect(() => {
     cargarInvitaciones();
   }, []);
 
-// Timer para GPS fallback
+  // Timer GPS fallback (20 seg sin beacon con BT encendido)
   useEffect(() => {
-    console.log('[GPS] Timer check - beaconDetectado:', beaconDetectado, 'invitaciones:', invitaciones.length);
-    if (!beaconDetectado && invitaciones.length > 0) {
-      console.log('[GPS] Iniciando timer de', GPS_TIMEOUT_SEGUNDOS, 'segundos');
+    if (!beaconDetectado && invitaciones.length > 0 && !gpsDisponible && !obteniendoGPS) {
       gpsTimerRef.current = setTimeout(() => {
-        const tieneGPS = invitaciones.some(inv => inv.puerta_lat && inv.puerta_lng);
-        console.log('[GPS] Timer disparado - tieneGPS:', tieneGPS, 'beaconDetectado:', beaconDetectado);
-        if (tieneGPS && !beaconDetectado) {
-          console.log('[GPS] Activando modo GPS');
-          setModoGPS(true);
+        if (!beaconDetectado && !gpsDisponible) {
+          obtenerUbicacionAuto();
         }
       }, GPS_TIMEOUT_SEGUNDOS * 1000);
     }
@@ -104,12 +87,27 @@ export default function Entrada() {
     };
   }, [beaconDetectado, invitaciones]);
 
+  // BT apagado: GPS inmediato (3 seg de gracia para inicialización)
+  useEffect(() => {
+    if (!escaneando && !beaconDetectado && invitaciones.length > 0 && !gpsDisponible && !obteniendoGPS) {
+      btOffTimerRef.current = setTimeout(() => {
+        if (!escaneandoRef.current && !beaconDetectado) {
+          obtenerUbicacionAuto();
+        }
+      }, BT_OFF_CHECK_SEGUNDOS * 1000);
+    }
+
+    return () => {
+      if (btOffTimerRef.current) clearTimeout(btOffTimerRef.current);
+    };
+  }, [escaneando, beaconDetectado, invitaciones]);
+
   useEffect(() => {
     if (estado === ESTADO.ENTRADA || estado === ESTADO.SALIDA || estado === ESTADO.ERROR) {
       const t = setTimeout(() => {
         setEstado(ESTADO.BUSCANDO);
-        setModoGPS(false);
         setGpsDisponible(false);
+        setGpsFueraDeRango(false);
         setUbicacionUsuario(null);
       }, 5000);
       return () => clearTimeout(t);
@@ -128,30 +126,56 @@ export default function Entrada() {
     }
   }
 
+  // Callback original de useBLE - sin useEffect de sincronización
   function handleBeaconDetectado(header) {
     if (estado === ESTADO.ABRIENDO) return;
-    // La sincronización ahora se hace en el useEffect de headerDetectado
+    const inv = invitaciones.find(i => i.uuid_ble?.toLowerCase() === header.toLowerCase());
+    if (inv) {
+      setBeaconDetectado(true);
+      setInvitacionBeacon(inv);
+      // Cancelar GPS si beacon detectado
+      setGpsDisponible(false);
+      setGpsFueraDeRango(false);
+      setUbicacionUsuario(false);
+      if (gpsTimerRef.current) clearTimeout(gpsTimerRef.current);
+      if (btOffTimerRef.current) clearTimeout(btOffTimerRef.current);
+    }
   }
 
-  async function obtenerUbicacion() {
+  async function obtenerUbicacionAuto() {
+    if (obteniendoGPS || gpsDisponible || beaconDetectado) return;
     setObteniendoGPS(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permiso denegado', 'Necesitamos acceso a tu ubicación para verificar proximidad.');
+        Alert.alert('Necesitamos acceso a tu ubicación para verificar proximidad.');
         setObteniendoGPS(false);
         return;
       }
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
-      setUbicacionUsuario({
+
+      if (beaconDetectado) {
+        setObteniendoGPS(false);
+        return;
+      }
+
+      const coords = {
         lat: location.coords.latitude,
         lng: location.coords.longitude,
+      };
+      setUbicacionUsuario(coords);
+
+      const hayEnRango = invitaciones.some(inv => {
+        if (!inv.puerta_lat || !inv.puerta_lng) return false;
+        const distancia = calcularDistancia(coords.lat, coords.lng, inv.puerta_lat, inv.puerta_lng);
+        return distancia <= (inv.puerta_radio || 50);
       });
+
       setGpsDisponible(true);
+      setGpsFueraDeRango(!hayEnRango);
     } catch (e) {
-      Alert.alert('Error', 'No se pudo obtener tu ubicación.');
       console.log('Error GPS:', e.message);
     } finally {
       setObteniendoGPS(false);
@@ -164,22 +188,19 @@ export default function Entrada() {
       ubicacionUsuario.lat, ubicacionUsuario.lng,
       inv.puerta_lat, inv.puerta_lng
     );
-    const radio = inv.puerta_radio || 50;
-    return distancia <= radio;
+    return distancia <= (inv.puerta_radio || 50);
   }
 
   async function handleBotonManual(inv) {
     if (estado === ESTADO.ABRIENDO) return;
 
     if (beaconDetectado) {
-      // Modo beacon: validar que el header coincida
       if (!invitacionBeacon || inv.uuid_ble?.toLowerCase() !== invitacionBeacon.uuid_ble?.toLowerCase()) {
         Alert.alert('Error', 'No estás frente a la puerta correcta para esta invitación.');
         return;
       }
       await solicitarAcceso(inv.uuid_ble, inv.id, null, null);
     } else if (gpsDisponible && ubicacionUsuario) {
-      // Modo GPS: validar que esté en rango
       if (!estaEnRango(inv)) {
         Alert.alert('Fuera de rango', 'No estás lo suficientemente cerca de la puerta.');
         return;
@@ -191,8 +212,8 @@ export default function Entrada() {
     setBeaconDetectado(false);
     setInvitacionBeacon(null);
     setGpsDisponible(false);
+    setGpsFueraDeRango(false);
     setUbicacionUsuario(null);
-    setModoGPS(false);
   }
 
   async function solicitarAcceso(uuid_ble, invitacion_id, lat, lng) {
@@ -256,7 +277,8 @@ export default function Entrada() {
   }
 
   // ---- Pantalla principal BUSCANDO ----
-  const botonHabilitado = beaconDetectado || (gpsDisponible && ubicacionUsuario);
+  const algunaEnRango = gpsDisponible && ubicacionUsuario && invitaciones.some(inv => estaEnRango(inv));
+  const autorizado = beaconDetectado || algunaEnRango;
 
   return (
     <View style={styles.container}>
@@ -268,38 +290,19 @@ export default function Entrada() {
       </View>
 
       <View style={styles.bleIndicador}>
-        {(() => {
-          const algunaEnRango = gpsDisponible && ubicacionUsuario && invitaciones.some(inv => estaEnRango(inv));
-          return (
-            <>
-              <View style={[styles.bleDot,
-                beaconDetectado ? styles.bleDotBeacon :
-                algunaEnRango ? styles.bleDotGPS :
-                escaneando && styles.bleDotActivo
-              ]} />
-              <Text style={styles.bleTexto}>
-                {beaconDetectado ? 'Barrera detectada — toca el boton para abrir' :
-                 algunaEnRango ? 'Ubicación verificada — toca el boton para abrir' :
-                 gpsDisponible ? 'Fuera del rango de la puerta' :
-                 modoGPS ? 'Beacon no detectado — usa tu ubicación' :
-                 escaneando ? 'Buscando barrera...' : 'Bluetooth inactivo'}
-              </Text>
-            </>
-          );
-        })()}
+        <View style={[styles.bleDot,
+          autorizado ? styles.bleDotVerde :
+          gpsFueraDeRango ? styles.bleDotActivo :
+          (escaneando || obteniendoGPS) ? styles.bleDotActivo :
+          styles.bleDotInactivo
+        ]} />
+        <Text style={styles.bleTexto}>
+          {autorizado ? 'Ingreso Autorizado — toca el boton para abrir' :
+           gpsFueraDeRango ? 'No estás cerca de la puerta' :
+           (escaneando || obteniendoGPS) ? 'Obteniendo Autorización de Ingreso...' :
+           'Activa Bluetooth o ubicación para continuar'}
+        </Text>
       </View>
-
-      {modoGPS && !gpsDisponible && !beaconDetectado && (
-        <TouchableOpacity
-          style={styles.botonGPS}
-          onPress={obtenerUbicacion}
-          disabled={obteniendoGPS}>
-          {obteniendoGPS
-            ? <ActivityIndicator color="#fff" size="small" />
-            : <Text style={styles.botonGPSTexto}>Verificar mi ubicación</Text>
-          }
-        </TouchableOpacity>
-      )}
 
       {invitaciones.length === 0 ? (
         <View style={styles.centrado}>
@@ -338,12 +341,6 @@ export default function Entrada() {
                   Hasta {new Date(item.fecha_hasta).toLocaleDateString('es-CL')}
                 </Text>
 
-                {gpsDisponible && ubicacionUsuario && !beaconDetectado && (
-                  <Text style={[styles.cardModo, { color: enRango ? '#22C55E' : '#EF4444' }]}>
-                    {enRango ? '📍 Dentro del rango GPS' : '📍 Fuera del rango GPS'}
-                  </Text>
-                )}
-
                 <TouchableOpacity
                   style={[styles.botonAcceso,
                     item.presencia === 'dentro' && styles.botonSalida,
@@ -373,13 +370,11 @@ const styles = StyleSheet.create({
   cerrarSesion:    { color: 'rgba(255,255,255,0.85)', fontSize: 14 },
   bleIndicador:    { flexDirection: 'row', alignItems: 'center', padding: 14,
                      backgroundColor: '#1E3A5F', borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.15)', gap: 10 },
-  bleDot:          { width: 10, height: 10, borderRadius: 5, backgroundColor: '#CCC' },
+  bleDot:          { width: 10, height: 10, borderRadius: 5 },
   bleDotActivo:    { backgroundColor: '#F59E0B' },
-  bleDotBeacon:    { backgroundColor: '#22C55E' },
-  bleDotGPS:       { backgroundColor: '#2196F3' },
+  bleDotVerde:     { backgroundColor: '#22C55E' },
+  bleDotInactivo:  { backgroundColor: '#CCC' },
   bleTexto:        { fontSize: 13, color: 'rgba(255,255,255,0.85)', flex: 1 },
-  botonGPS:        { backgroundColor: '#2196F3', margin: 16, padding: 14, borderRadius: 12, alignItems: 'center' },
-  botonGPSTexto:   { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
   card:            { borderRadius: 12, padding: 16, marginBottom: 12,
                      borderColor: '#FFFFFF', borderWidth: 0.5 },
   cardHeader:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
@@ -390,7 +385,6 @@ const styles = StyleSheet.create({
   cardHorario:     { fontSize: 13, color: 'rgba(255,255,255,0.85)', marginBottom: 2 },
   cardFecha:       { fontSize: 13, color: 'rgba(255,255,255,0.6)', marginBottom: 12 },
   cardUnidad:      { fontSize: 14, color: '#F59E0B', fontWeight: '600', marginBottom: 4 },
-  cardModo:        { fontSize: 12, fontWeight: '600', marginBottom: 8 },
   botonAcceso:     { backgroundColor: '#1D9E75', borderRadius: 10, padding: 14, alignItems: 'center' },
   botonSalida:     { backgroundColor: '#F59E0B' },
   botonDisabled:   { opacity: 0.4 },
